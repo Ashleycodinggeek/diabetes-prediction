@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import pickle
+import numpy as np
 
 # -------------------------------
 # Utility: Try to load using joblib first, then pickle
@@ -10,36 +11,49 @@ def robust_load(filepath):
     try:
         import joblib
         return joblib.load(filepath)
+    except ImportError:
+        st.warning(f"joblib not found, trying pickle for {filepath}")
     except Exception as e1:
-        try:
-            with open(filepath, 'rb') as f:
-                return pickle.load(f)
-        except Exception as e2:
-            raise RuntimeError(f"Failed to load {filepath} with joblib ({e1}) and pickle ({e2})")
+        st.warning(f"Loading {filepath} with joblib failed: {e1}. Trying pickle...")
+    try:
+        with open(filepath, 'rb') as f:
+            return pickle.load(f)
+    except Exception as e2:
+        raise RuntimeError(f"Failed to load {filepath} with joblib ({e1 if 'e1' in locals() else 'N/A'}) and pickle ({e2})")
 
 # -------------------------------
 # Load artifacts
 # -------------------------------
 @st.cache_resource
-def load_artifacts():
-    try:
-        model = robust_load('model.pkl')
-        scaler = robust_load('scaler.pkl')
-        feature_columns = robust_load('feature_columns.pkl')
-        st.success("✅ All artifacts (model, scaler, features) loaded successfully!")
-        return model, scaler, feature_columns
-    except Exception as e:
-        st.error(f"❌ Failed to load required files: {e}")
-        st.stop()
+def load_model():
+    return robust_load('model.pkl')
 
-model, scaler, feature_columns = load_artifacts()
+@st.cache_resource
+def load_scaler():
+    try:
+        return robust_load('scaler.pkl')
+    except RuntimeError:
+        st.info("Scaler file 'scaler.pkl' not found or could not be loaded. Assuming no scaling was applied during training.")
+        return None
+
+@st.cache_resource
+def load_feature_columns():
+    try:
+        return robust_load('feature_columns.pkl')
+    except RuntimeError:
+        st.warning("Feature columns file 'feature_columns.pkl' not found or could not be loaded. Using default column order from input.")
+        return None
+
+model = load_model()
+scaler = load_scaler()
+feature_columns = load_feature_columns()
 
 # -------------------------------
 # Streamlit UI
 # -------------------------------
 st.set_page_config(page_title="Diabetes Prediction - AshleyAI", page_icon="🩺")
-st.title("🩺 AshleyAI: Diabetes Prediction App")
-st.markdown("Enter patient metrics to predict diabetes risk using our trained AI model.")
+st.title("🩺 AshleyAI: Diabetes Risk Predictor")
+st.markdown("Enter patient health metrics below to predict diabetes risk using our trained AI model.")
 
 # -------------------------------
 # Input form
@@ -72,42 +86,53 @@ input_dict = {
     'Age': age
 }
 
-# Convert to DataFrame **in the exact order used during training**
-try:
-    input_df = pd.DataFrame([{col: input_dict[col] for col in feature_columns}])
-except KeyError as e:
-    st.error(f"Missing feature in input: {e}. Ensure feature_columns.pkl matches the input fields.")
-    st.stop()
+# Create DataFrame
+input_df = pd.DataFrame([input_dict])
+
+# Reorder DataFrame if feature_columns is available
+if feature_columns is not None:
+    try:
+        # Ensure the order matches training
+        input_df = input_df.reindex(columns=feature_columns)
+    except KeyError as e:
+        st.error(f"Feature mismatch: {e}. Check if 'feature_columns.pkl' matches input fields.")
+        st.stop()
 
 # -------------------------------
 # Prediction
 # -------------------------------
 if st.button("🔍 Predict Diabetes Risk"):
     try:
-        # Apply scaling
-        input_scaled = scaler.transform(input_df)
-        
-        # Predict
-        pred = model.predict(input_scaled)[0]
-        proba = model.predict_proba(input_scaled)[0]
+        # Prepare data for prediction
+        X_to_predict = input_df.values  # Get the values as numpy array
+
+        # Apply scaling if scaler is loaded
+        if scaler is not None:
+            X_scaled = scaler.transform(X_to_predict)
+            prediction = model.predict(X_scaled)[0]
+            proba = model.predict_proba(X_scaled)[0]
+        else:
+            # Use raw values if no scaler
+            prediction = model.predict(X_to_predict)[0]
+            proba = model.predict_proba(X_to_predict)[0]
 
         # Display result
-        st.subheader("🎯 Prediction Result")
-        if pred == 1:
-            st.error("⚠️ **Prediction: Diabetic**")
+        st.subheader("✅ Prediction Result")
+        if prediction == 1:
+            st.error("⚠️ **Prediction: Likely HAS Diabetes**")
         else:
-            st.success("✅ **Prediction: Non-Diabetic**")
+            st.success("✅ **Prediction: Unlikely to Have Diabetes**")
 
-        st.subheader("📊 Confidence")
-        st.write(f"Probability of **Non-Diabetic**: {proba[0]:.2%}")
-        st.write(f"Probability of **Diabetic**: {proba[1]:.2%}")
+        st.subheader("📊 Confidence Level")
+        st.write(f"Probability of **No Diabetes**: {proba[0]:.2%}")
+        st.write(f"Probability of **Diabetes**: {proba[1]:.2%}")
 
     except Exception as e:
-        st.error(f"Prediction failed: {e}")
-        st.info("Ensure `scaler.pkl` and `feature_columns.pkl` match the training configuration.")
+        st.error(f"❌ Prediction failed: {e}")
+        st.info("Ensure `model.pkl` (and `scaler.pkl`, `feature_columns.pkl` if used) are compatible with the input features.")
 
 # -------------------------------
-# Footer
+# Info Footer
 # -------------------------------
 st.markdown("---")
 st.caption("💡 Developed as part of the AI Mini Team Project. Not a medical diagnosis tool.")
