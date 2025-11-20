@@ -1,5 +1,6 @@
-streamlit==1.39.0
-pandas==2.1.4
-scikit-learn==1.4.0
-numpy==1.26.4
-python-dotenv==1.0.1  # optional, but safe to include
+streamlit>=1.28.0
+pandas>=2.0.0,<3.0.0
+scikit-learn>=1.0.0
+numpy>=1.21.0
+# joblib is often included with scikit-learn, but explicitly adding for clarity
+joblib>=1.1.0
